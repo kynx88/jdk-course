@@ -1,14 +1,16 @@
 /* =========================================================
-   JDK COURSE - script.js (FINAL v9)
+   JDK COURSE - script.js (FINAL)
    Fitur lengkap:
    - Username unik + login email/username
    - Tanggal lahir + jenis kelamin
-   - Upload gambar kursus (guru/admin)
+   - Upload gambar kursus
    - Notifikasi in-app (bell)
    - Riwayat jadwal murid
    - Laporan admin + export CSV
-   - Murid hanya bisa batalkan jadwal (konfirmasi oleh guru)
-   - Notifikasi pembatalan dua arah (murid ↔ guru)
+   - Murid hanya bisa batalkan (konfirmasi oleh guru)
+   - Notifikasi pembatalan dua arah
+   - Beranda hero 2 kolom + benefit + kategori
+   - Verifikasi guru oleh admin
    ========================================================= */
 
 const DB_KEY = 'jdk_course_db_v9';
@@ -144,6 +146,7 @@ function makeUser(id, name, username, email, password, role, extra={}){
     id, name, username, email, salt,
     passwordHash: hashPassword(password, salt),
     role,
+    approved: true,
     tanggalLahir: '2000-01-01',
     jenisKelamin: 'Laki-laki',
     ...extra
@@ -203,6 +206,7 @@ function loadDB(){
       if(!d.notifications) d.notifications = [];
       if(!d.nextId.notification) d.nextId.notification = 1;
       if(d.courses) d.courses.forEach(c => { if(typeof c.image === 'undefined') c.image = ''; });
+      if(d.users) d.users.forEach(u => { if(typeof u.approved === 'undefined') u.approved = true; });
       return d;
     }
   }catch(e){}
@@ -373,6 +377,15 @@ function render(){
   const app = document.getElementById('app');
   const user = currentUser();
 
+  // Paksa logout guru yang belum diverifikasi
+  if(user && user.role === 'guru' && user.approved === false){
+    session = null;
+    localStorage.removeItem(SESSION_KEY);
+    toast('Akun guru belum diverifikasi. Silakan login ulang setelah diverifikasi admin.','error');
+    go('#/login'); render();
+    return;
+  }
+
   if((parts[0]==='bookings' || parts[0]==='guru' || parts[0]==='admin') && !user){
     app.innerHTML = cardNotLoggedIn(); return;
   }
@@ -446,20 +459,37 @@ function renderNav(){
 }
 
 /* =========================================================
-   HOME
+   HOME — hero 2 kolom + benefit + kategori
    ========================================================= */
 function renderHome(app){
   const totalKursus = db.courses.length;
-  const totalGuru   = db.users.filter(u=>u.role==='guru').length;
+  const totalGuru   = db.users.filter(u=>u.role==='guru' && u.approved !== false).length;
   const totalMurid  = db.users.filter(u=>u.role==='murid').length;
 
+  const catIcons = {
+    'Matematika':'📐', 'Bahasa':'🗣️', 'Programming':'💻',
+    'Musik':'🎵', 'Desain':'🎨', 'Sains':'🔬',
+    'Seni':'🖼️', 'Olahraga':'⚽', 'Bisnis':'💼', 'Fotografi':'📷'
+  };
+
   app.innerHTML = `
-    <section class="hero">
-      <h1>Temukan Kursus yang Tepat, Atur Jadwal Tanpa Bentrok</h1>
-      <p>JDK Course menghubungkan murid dengan guru terbaik. Cari kursus sesuai kebutuhan & tingkat kemampuan, lalu pesan jadwal belajar yang tidak bertabrakan dengan aktivitas Anda.</p>
-      <div class="row">
-        <a href="#/courses" class="btn btn-primary">🔍 Jelajahi Kursus</a>
-        ${!currentUser() ? `<a href="#/login" class="btn btn-outline" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.4)">Daftar Sekarang</a>` : ''}
+    <section class="hero-2col">
+      <div class="hero-text">
+        <h1>Temukan Kursus yang Tepat,<br>Atur Jadwal Tanpa Bentrok</h1>
+        <p>JDK Course menghubungkan murid dengan guru terbaik. Cari kursus sesuai kebutuhan & tingkat kemampuan, lalu pesan jadwal belajar yang tidak bertabrakan dengan aktivitas Anda.</p>
+        <div class="row">
+          <a href="#/courses" class="btn btn-primary"
+             onclick="filterState.q='';filterState.category='';filterState.level='';filterState.day='';">
+            🔍 Jelajahi Kursus
+          </a>
+          ${!currentUser() ? `<a href="#/login" class="btn btn-outline">Daftar Sekarang</a>` : ''}
+        </div>
+      </div>
+      <div class="hero-image">
+        <img
+          src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=800&q=80"
+          alt="Belajar bersama"
+          onerror="this.style.display='none'">
       </div>
     </section>
 
@@ -470,9 +500,58 @@ function renderHome(app){
       <div class="stat"><div class="num">${db.categories.length}</div><div class="lbl">Kategori Kursus</div></div>
     </div>
 
+    <h2>✨ Kenapa JDK Course?</h2>
+    <div class="benefit-grid">
+      <div class="benefit-card">
+        <div class="icon">🔍</div>
+        <h4>Pencarian Mudah</h4>
+        <p>Temukan kursus sesuai kebutuhan dengan filter kategori, tingkat, dan jadwal.</p>
+      </div>
+      <div class="benefit-card">
+        <div class="icon">👨‍🏫</div>
+        <h4>Guru Berpengalaman</h4>
+        <p>Belajar langsung dari guru terpilih di bidangnya masing-masing.</p>
+      </div>
+      <div class="benefit-card">
+        <div class="icon">📅</div>
+        <h4>Jadwal Fleksibel</h4>
+        <p>Pesan jadwal yang tersedia tanpa takut bentrok dengan aktivitas lain.</p>
+      </div>
+      <div class="benefit-card">
+        <div class="icon">🔔</div>
+        <h4>Notifikasi Real-time</h4>
+        <p>Dapatkan notifikasi otomatis saat jadwal dikonfirmasi atau dibatalkan.</p>
+      </div>
+    </div>
+
     <div class="between">
-      <h2>Kursus Populer</h2>
-      <a href="#/courses" class="btn btn-outline btn-sm">Lihat Semua →</a>
+      <h2>📂 Kategori Kursus</h2>
+      <a href="#/courses" class="btn btn-outline btn-sm"
+         onclick="filterState.q='';filterState.category='';filterState.level='';filterState.day='';">
+        Lihat Semua →
+      </a>
+    </div>
+    <div class="category-grid">
+      ${db.categories.map(cat => {
+        const count = db.courses.filter(c=>c.categoryId===cat.id).length;
+        const ico = catIcons[cat.name] || '📚';
+        return `
+          <a href="#/courses" class="category-card"
+             onclick="filterState.q='';filterState.level='';filterState.day='';filterState.category=${cat.id};">
+            <div class="cat-ico">${ico}</div>
+            <div class="cat-name">${escapeHtml(cat.name)}</div>
+            <div class="cat-count">${count} kursus</div>
+          </a>
+        `;
+      }).join('')}
+    </div>
+
+    <div class="between">
+      <h2>🔥 Kursus Populer</h2>
+      <a href="#/courses" class="btn btn-outline btn-sm"
+         onclick="filterState.q='';filterState.category='';filterState.level='';filterState.day='';">
+        Lihat Semua →
+      </a>
     </div>
     <div class="grid">${db.courses.slice(0,3).map(courseCard).join('')}</div>
   `;
@@ -539,7 +618,11 @@ function loginForm(){
       <button class="btn btn-primary btn-block" type="submit">Login</button>
     </form>
     <div style="margin-top:16px;padding:12px;background:var(--gray-50);border-radius:8px;font-size:12px;color:var(--gray-500);line-height:1.7">
-     
+      <b>Akun demo:</b><br>
+      Admin: admin@jdk.com / admin123<br>
+      Guru: budi@jdk.com / guru123<br>
+      Murid: rina@jdk.com / murid123<br>
+      <i>Bisa juga login pakai username: admin / budi / rina</i>
     </div>
   `;
 }
@@ -592,11 +675,14 @@ function registerForm(){
       <div class="form-group">
         <label>Daftar Sebagai</label>
         <select name="role" required>
-          <option value="murid">Murid</option>
-          <option value="guru">Guru</option>
+          <option value="murid">Murid (langsung aktif)</option>
+          <option value="guru">Guru (perlu verifikasi admin)</option>
         </select>
       </div>
       <button class="btn btn-primary btn-block" type="submit">Daftar</button>
+      <p class="muted" style="font-size:11px;margin-top:10px;text-align:center">
+        Pendaftaran guru memerlukan verifikasi admin sebelum dapat login.
+      </p>
     </form>
   `;
 }
@@ -610,6 +696,11 @@ function handleLogin(e){
   const user = findUserByLogin(identifier);
   if(!user){ toast('Email/username atau password salah','error'); return; }
   if(!verifyPassword(pass, user.salt, user.passwordHash)){ toast('Email/username atau password salah','error'); return; }
+
+  if(user.approved === false){
+    toast('Akun Anda belum diverifikasi admin. Hubungi admin untuk verifikasi.','error');
+    return;
+  }
 
   session = user.id;
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
@@ -639,16 +730,32 @@ function handleRegister(e){
   if(db.users.some(u=>u.email.toLowerCase()===email)){ toast('Email sudah terdaftar','error'); return; }
 
   const salt = generateSalt();
+  const approved = role !== 'guru';
   const u = {
     id: uid('user'),
     name, username, email, salt,
     passwordHash: hashPassword(pass, salt),
     role,
+    approved,
     tanggalLahir,
     jenisKelamin,
     ...(role === 'guru' ? { bio:'' } : {}),
   };
-  db.users.push(u); saveDB();
+  db.users.push(u);
+
+  if(role === 'guru'){
+    db.users.filter(x=>x.role==='admin').forEach(adm => {
+      addNotification(adm.id,
+        `👤 Pendaftaran guru baru: ${name} (@${username}). Menunggu verifikasi Anda.`,
+        'info');
+    });
+    saveDB();
+    toast('Pendaftaran guru berhasil. Akun menunggu verifikasi admin.','success');
+    go('#/login'); render();
+    return;
+  }
+
+  saveDB();
   session = u.id;
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   toast('Registrasi berhasil','success');
@@ -826,7 +933,7 @@ function bookSchedule(scheduleId){
 function overlaps(s1,e1,s2,e2){ return s1 < e2 && s2 < e1; }
 
 /* =========================================================
-   BOOKINGS (MURID) — HANYA tombol Batalkan
+   BOOKINGS (MURID) — hanya tombol Batalkan
    ========================================================= */
 function renderBookings(app){
   const user = currentUser();
@@ -912,21 +1019,18 @@ function cancelBooking(id){
   const kursus = c ? c.title : '-';
 
   if(actor && murid && actor.id === murid.id){
-    // Murid batalkan → notif ke GURU
     if(guru){
       addNotification(guru.id,
         `❌ ${murid.name} (@${murid.username}) membatalkan jadwal ${jadwal} untuk kursus "${kursus}".`,
         'warning');
     }
   } else if(actor && guru && actor.id === guru.id){
-    // Guru batalkan → notif ke MURID
     if(murid){
       addNotification(murid.id,
         `❌ Jadwal Anda untuk "${kursus}" (${jadwal}) telah dibatalkan oleh ${guru.name} (@${guru.username}).`,
         'warning');
     }
   } else if(actor && actor.role === 'admin'){
-    // Admin batalkan → notif ke MURID dan GURU
     if(murid){
       addNotification(murid.id,
         `❌ Jadwal Anda untuk "${kursus}" (${jadwal}) dibatalkan oleh admin.`,
@@ -1199,12 +1303,12 @@ function renderScheduleTable(courses){
 }
 
 /* =========================================================
-   MODAL COURSE (dengan upload gambar)
+   MODAL COURSE
    ========================================================= */
 function openCourseForm(id){
   const editing = id ? findCourse(id) : null;
   const user = currentUser();
-  const guruList = db.users.filter(u=>u.role==='guru');
+  const guruList = db.users.filter(u=>u.role==='guru' && u.approved !== false);
   const guruField = (user.role==='admin')
     ? `<div class="form-group"><label>Guru Pengajar</label>
         <select name="guruId" required>
@@ -1408,13 +1512,15 @@ function deleteSchedule(id){
    ========================================================= */
 function renderAdminDash(app){
   const tab = ui.adminTab;
+  const pendingGuruCount = db.users.filter(u=>u.role==='guru' && u.approved===false).length;
+
   app.innerHTML = `
     <h1>Admin Panel</h1>
     <p class="muted" style="margin-bottom:16px">Kelola data pengguna, guru, kategori, kursus, jadwal, laporan, dan backup.</p>
 
     <div class="stat-grid">
       <div class="stat"><div class="num">${db.users.length}</div><div class="lbl">Pengguna</div></div>
-      <div class="stat"><div class="num">${db.users.filter(u=>u.role==='guru').length}</div><div class="lbl">Guru</div></div>
+      <div class="stat"><div class="num">${db.users.filter(u=>u.role==='guru' && u.approved !== false).length}</div><div class="lbl">Guru Aktif</div></div>
       <div class="stat"><div class="num">${db.courses.length}</div><div class="lbl">Kursus</div></div>
       <div class="stat"><div class="num">${db.schedules.length}</div><div class="lbl">Jadwal</div></div>
       <div class="stat"><div class="num">${db.bookings.length}</div><div class="lbl">Pemesanan</div></div>
@@ -1422,6 +1528,9 @@ function renderAdminDash(app){
 
     <div class="tabs">
       <button class="${tab==='users'?'active':''}"      onclick="ui.adminTab='users';render()">Pengguna</button>
+      <button class="${tab==='verify'?'active':''}"     onclick="ui.adminTab='verify';render()">
+        Verifikasi Guru${pendingGuruCount > 0 ? ` <span style="background:var(--danger);color:#fff;font-size:10px;padding:2px 7px;border-radius:10px;margin-left:4px">${pendingGuruCount}</span>` : ''}
+      </button>
       <button class="${tab==='guru'?'active':''}"       onclick="ui.adminTab='guru';render()">Guru</button>
       <button class="${tab==='categories'?'active':''}" onclick="ui.adminTab='categories';render()">Kategori</button>
       <button class="${tab==='courses'?'active':''}"    onclick="ui.adminTab='courses';render()">Kursus</button>
@@ -1436,13 +1545,67 @@ function renderAdminDash(app){
 }
 
 function renderAdminTab(tab){
+  if(tab==='verify'){
+    const pending  = db.users.filter(u=>u.role==='guru' && u.approved===false);
+    const approved = db.users.filter(u=>u.role==='guru' && u.approved!==false);
+    return `
+      <h3 style="margin-bottom:12px">🔔 Pendaftaran Guru Baru</h3>
+      <p class="muted" style="margin-bottom:16px">Verifikasi akun guru yang baru mendaftar. Guru tidak bisa login sebelum diverifikasi.</p>
+      ${pending.length===0
+        ? `<div class="empty"><div class="ico">✅</div><h3>Tidak ada pendaftaran baru</h3>
+           <p class="muted">Semua pendaftaran guru sudah diverifikasi.</p></div>`
+        : `<div class="table-wrap"><table>
+            <thead><tr><th>Nama</th><th>Username</th><th>Email</th><th>Tanggal Lahir</th><th>Umur</th><th>Jenis Kelamin</th><th>Aksi</th></tr></thead>
+            <tbody>
+              ${pending.map(g=>{
+                const umur = hitungUmur(g.tanggalLahir);
+                return `<tr>
+                  <td><b>${escapeHtml(g.name)}</b></td>
+                  <td>@${escapeHtml(g.username||'-')}</td>
+                  <td>${escapeHtml(g.email)}</td>
+                  <td>${fmtTanggalLahir(g.tanggalLahir)}</td>
+                  <td>${umur !== null ? umur + ' thn' : '-'}</td>
+                  <td>${escapeHtml(g.jenisKelamin||'-')}</td>
+                  <td style="white-space:nowrap">
+                    <button class="btn btn-success btn-sm" onclick="approveGuru(${g.id})">✅ Setujui</button>
+                    <button class="btn btn-danger btn-sm" onclick="rejectGuru(${g.id})">❌ Tolak</button>
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table></div>`
+      }
+
+      <h3 style="margin:24px 0 12px">✅ Guru Terverifikasi (${approved.length})</h3>
+      ${approved.length===0
+        ? `<p class="muted">Belum ada guru terverifikasi.</p>`
+        : `<div class="table-wrap"><table>
+            <thead><tr><th>Nama</th><th>Username</th><th>Email</th><th>Jumlah Kursus</th><th>Status</th></tr></thead>
+            <tbody>
+              ${approved.map(g=>`
+                <tr>
+                  <td><b>${escapeHtml(g.name)}</b></td>
+                  <td>@${escapeHtml(g.username||'-')}</td>
+                  <td>${escapeHtml(g.email)}</td>
+                  <td>${db.courses.filter(c=>c.guruId===g.id).length}</td>
+                  <td><span class="badge green">Terverifikasi</span></td>
+                </tr>`).join('')}
+            </tbody>
+          </table></div>`
+      }
+    `;
+  }
+
   if(tab==='users'){
     return `
       <div class="table-wrap"><table>
-        <thead><tr><th>ID</th><th>Nama</th><th>Username</th><th>Email</th><th>Tanggal Lahir</th><th>Umur</th><th>Jenis Kelamin</th><th>Role</th><th>Aksi</th></tr></thead>
+        <thead><tr><th>ID</th><th>Nama</th><th>Username</th><th>Email</th><th>Tanggal Lahir</th><th>Umur</th><th>Jenis Kelamin</th><th>Role</th><th>Status</th><th>Aksi</th></tr></thead>
         <tbody>
           ${db.users.map(u=>{
             const umur = hitungUmur(u.tanggalLahir);
+            const statusBadge = u.approved === false
+              ? `<span class="badge orange">Pending</span>`
+              : `<span class="badge green">Aktif</span>`;
             return `<tr>
               <td>${u.id}</td>
               <td>${escapeHtml(u.name)}</td>
@@ -1452,6 +1615,7 @@ function renderAdminTab(tab){
               <td>${umur !== null ? umur + ' thn' : '-'}</td>
               <td>${escapeHtml(u.jenisKelamin || '-')}</td>
               <td><span class="badge gray">${u.role}</span></td>
+              <td>${statusBadge}</td>
               <td>
                 ${u.role!=='admin'
                   ? `<button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id})">Hapus</button>`
@@ -1473,10 +1637,13 @@ function renderAdminTab(tab){
       ${gurus.length===0
         ? `<div class="empty"><div class="ico">👨‍🏫</div><p>Belum ada data guru.</p></div>`
         : `<div class="table-wrap"><table>
-            <thead><tr><th>ID</th><th>Nama</th><th>Username</th><th>Email</th><th>Tanggal Lahir</th><th>Umur</th><th>Jenis Kelamin</th><th>Kursus</th><th>Aksi</th></tr></thead>
+            <thead><tr><th>ID</th><th>Nama</th><th>Username</th><th>Email</th><th>Tanggal Lahir</th><th>Umur</th><th>Jenis Kelamin</th><th>Status</th><th>Kursus</th><th>Aksi</th></tr></thead>
             <tbody>
               ${gurus.map(g=>{
                 const umur = hitungUmur(g.tanggalLahir);
+                const statusBadge = g.approved === false
+                  ? `<span class="badge orange">Pending</span>`
+                  : `<span class="badge green">Aktif</span>`;
                 return `<tr>
                   <td>${g.id}</td>
                   <td><b>${escapeHtml(g.name)}</b></td>
@@ -1485,6 +1652,7 @@ function renderAdminTab(tab){
                   <td>${fmtTanggalLahir(g.tanggalLahir)}</td>
                   <td>${umur !== null ? umur + ' thn' : '-'}</td>
                   <td>${escapeHtml(g.jenisKelamin || '-')}</td>
+                  <td>${statusBadge}</td>
                   <td>${db.courses.filter(c=>c.guruId===g.id).length}</td>
                   <td style="white-space:nowrap">
                     <button class="btn btn-outline btn-sm" onclick="openGuruForm(${g.id})">Edit</button>
@@ -1762,13 +1930,14 @@ function exportCSV(type){
     });
     downloadCSV(`laporan_pemesanan_${ts}.csv`, toCSV(rows));
   } else if(type === 'users'){
-    const rows = [['ID','Nama','Username','Email','Tanggal Lahir','Umur','Jenis Kelamin','Role']];
+    const rows = [['ID','Nama','Username','Email','Tanggal Lahir','Umur','Jenis Kelamin','Role','Status']];
     db.users.forEach(u => rows.push([
       u.id, u.name, u.username || '', u.email,
       u.tanggalLahir || '',
       hitungUmur(u.tanggalLahir) ?? '',
       u.jenisKelamin || '',
       u.role,
+      u.approved === false ? 'Pending' : 'Aktif',
     ]));
     downloadCSV(`laporan_pengguna_${ts}.csv`, toCSV(rows));
   }
@@ -1810,6 +1979,7 @@ function importData(){
       if(!db.notifications) db.notifications = [];
       if(!db.nextId.notification) db.nextId.notification = 1;
       db.courses.forEach(c => { if(typeof c.image === 'undefined') c.image = ''; });
+      db.users.forEach(u => { if(typeof u.approved === 'undefined') u.approved = true; });
       saveDB();
       toast('Data berhasil dipulihkan','success');
       render();
@@ -1826,7 +1996,7 @@ function resetData(){
 }
 
 /* =========================================================
-   ADMIN: CRUD GURU (dengan username)
+   ADMIN: CRUD GURU
    ========================================================= */
 function openGuruForm(id){
   const editing = id ? findUser(id) : null;
@@ -1910,11 +2080,38 @@ function saveGuru(e, id){
       id: uid('user'), name, username, email, salt,
       passwordHash: hashPassword(pass, salt),
       role:'guru', bio, tanggalLahir, jenisKelamin,
+      approved: true,
     });
     toast('Guru ditambahkan','success');
   }
   saveDB();
   document.querySelector('.modal-bg')?.remove();
+  render();
+}
+
+/* =========================================================
+   ADMIN: VERIFIKASI GURU
+   ========================================================= */
+function approveGuru(id){
+  const g = findUser(id);
+  if(!g) return;
+  if(!confirm(`Setujui pendaftaran guru "${g.name}"?`)) return;
+  g.approved = true;
+  addNotification(g.id,
+    `✅ Pendaftaran Anda sebagai guru telah disetujui oleh admin. Anda sekarang dapat login.`,
+    'success');
+  saveDB();
+  toast('Guru berhasil diverifikasi','success');
+  render();
+}
+
+function rejectGuru(id){
+  const g = findUser(id);
+  if(!g) return;
+  if(!confirm(`Tolak dan hapus pendaftaran "${g.name}"?\n\nAkun akan dihapus permanen.`)) return;
+  db.users = db.users.filter(u=>u.id!==id);
+  saveDB();
+  toast('Pendaftaran guru ditolak','info');
   render();
 }
 
@@ -2000,4 +2197,5 @@ Object.assign(window, {
   exportCSV,
   toggleNotifPanel, markAllReadAndRefresh,
   handleCourseImage, clearCourseImage,
+  approveGuru, rejectGuru,
 });
