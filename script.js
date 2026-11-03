@@ -7,14 +7,24 @@
    - Notifikasi in-app (bell)
    - Riwayat jadwal murid
    - Laporan admin + export CSV
-   - Murid hanya bisa batalkan (konfirmasi oleh guru)
+   - Murid hanya bisa batalkan, konfirmasi oleh guru
    - Notifikasi pembatalan dua arah
-   - Beranda hero 2 kolom + benefit + kategori
    - Verifikasi guru oleh admin
+   - Halaman Tentang
+   - Rating & ulasan kursus (bintang 1-5)
+   - Dark mode / Light mode
+   - WISHLIST (Daftar Keinginan)
    ========================================================= */
 
-const DB_KEY = 'jdk_course_db_v9';
+const DB_KEY = 'jdk_course_db_v10';
 const SESSION_KEY = 'jdk_course_session_v1';
+const THEME_KEY = 'jdk_course_theme';
+
+// Terapkan tema sebelum render supaya tidak "flash"
+(function(){
+  const t = localStorage.getItem(THEME_KEY) || 'light';
+  document.documentElement.setAttribute('data-theme', t);
+})();
 
 const DAYS = ['Senin','Selasa','Rabu','Kamis','Jumat','Sabtu','Minggu'];
 const LEVELS = ['Pemula','Menengah','Lanjutan'];
@@ -43,7 +53,7 @@ function verifyPassword(password, salt, hash){
 }
 
 /* =========================================================
-   GAMBAR: resize + convert ke base64
+   GAMBAR
    ========================================================= */
 function resizeImage(file, maxWidth = 800, quality = 0.75){
   return new Promise((resolve, reject) => {
@@ -138,6 +148,122 @@ function isUsernameTaken(username, excludeId=null){
 }
 
 /* =========================================================
+   RATING HELPERS
+   ========================================================= */
+function getCourseRatings(courseId){
+  return db.ratings.filter(r => r.courseId === courseId);
+}
+function getAvgRating(courseId){
+  const rs = getCourseRatings(courseId);
+  if(rs.length === 0) return { avg: 0, count: 0 };
+  const sum = rs.reduce((s, r) => s + r.rating, 0);
+  return { avg: sum / rs.length, count: rs.length };
+}
+function starsHtml(rating){
+  const rounded = Math.round(rating);
+  let html = '';
+  for(let i = 1; i <= 5; i++){
+    html += i <= rounded
+      ? '<span class="star-full">★</span>'
+      : '<span class="star-empty">★</span>';
+  }
+  return html;
+}
+function getUserRating(courseId, userId){
+  return db.ratings.find(r => r.courseId === courseId && r.muridId === userId);
+}
+function canUserRate(courseId, userId){
+  return db.bookings.some(b =>
+    b.muridId === userId && b.courseId === courseId && b.status === 'confirmed'
+  );
+}
+function setRatingInput(n){
+  const input = document.getElementById('ratingInput');
+  if(input) input.value = n;
+  const stars = document.querySelectorAll('#starInput .si');
+  stars.forEach((s, i) => s.classList.toggle('active', i < n));
+}
+function submitRating(courseId){
+  const user = currentUser();
+  if(!user || user.role !== 'murid'){ toast('Hanya murid yang bisa memberi rating','error'); return; }
+  if(!canUserRate(courseId, user.id)){ toast('Anda harus punya jadwal terkonfirmasi di kursus ini','error'); return; }
+
+  const val = parseInt(document.getElementById('ratingInput').value, 10);
+  if(!val || val < 1 || val > 5){ toast('Pilih rating 1-5 bintang','error'); return; }
+
+  const comment = (document.getElementById('ratingComment')?.value || '').trim();
+
+  const existing = getUserRating(courseId, user.id);
+  if(existing){
+    existing.rating = val;
+    existing.comment = comment;
+    existing.updatedAt = new Date().toISOString();
+    toast('Rating berhasil diperbarui','success');
+  } else {
+    db.ratings.push({
+      id: uid('rating'),
+      muridId: user.id,
+      courseId,
+      rating: val,
+      comment,
+      createdAt: new Date().toISOString(),
+    });
+    toast('Terima kasih atas rating Anda!','success');
+  }
+  saveDB();
+  render();
+}
+function deleteRating(courseId){
+  const user = currentUser();
+  if(!user) return;
+  if(!confirm('Hapus rating Anda untuk kursus ini?')) return;
+  db.ratings = db.ratings.filter(r => !(r.muridId === user.id && r.courseId === courseId));
+  saveDB();
+  toast('Rating dihapus','info');
+  render();
+}
+
+/* =========================================================
+   WISHLIST HELPERS
+   ========================================================= */
+function toggleWishlist(courseId, event){
+  if(event){ event.preventDefault(); event.stopPropagation(); }
+  const user = currentUser();
+  if(!user || user.role !== 'murid'){ 
+    toast('Login sebagai murid untuk menambah ke wishlist','error'); 
+    return; 
+  }
+  
+  if(!user.wishlist) user.wishlist = [];
+  
+  const idx = user.wishlist.indexOf(courseId);
+  if(idx > -1){
+    user.wishlist.splice(idx, 1);
+    toast('Dihapus dari wishlist','info');
+  } else {
+    user.wishlist.push(courseId);
+    toast('Ditambahkan ke wishlist ❤️','success');
+  }
+  saveDB();
+  render();
+}
+
+/* =========================================================
+   THEME
+   ========================================================= */
+function getTheme(){
+  return localStorage.getItem(THEME_KEY) || 'light';
+}
+function setTheme(t){
+  localStorage.setItem(THEME_KEY, t);
+  document.documentElement.setAttribute('data-theme', t);
+  render();
+}
+function toggleTheme(){
+  setTheme(getTheme() === 'dark' ? 'light' : 'dark');
+}
+
+/* =========================================================
    DATABASE
    ========================================================= */
 function makeUser(id, name, username, email, password, role, extra={}){
@@ -149,13 +275,14 @@ function makeUser(id, name, username, email, password, role, extra={}){
     approved: true,
     tanggalLahir: '2000-01-01',
     jenisKelamin: 'Laki-laki',
+    wishlist: [],
     ...extra
   };
 }
 
 function seedDB(){
   return {
-    nextId: { user:6, category:6, course:7, schedule:9, booking:1, notification:1 },
+    nextId: { user:6, category:6, course:7, schedule:9, booking:1, notification:1, rating:7 },
     users: [
       makeUser(1,'Admin JDK',    'admin',   'admin@jdk.com', 'admin123', 'admin',
         { tanggalLahir:'1994-05-12', jenisKelamin:'Laki-laki' }),
@@ -195,6 +322,14 @@ function seedDB(){
     ],
     bookings: [],
     notifications: [],
+    ratings: [
+      { id:1, muridId:0, courseId:1, rating:5, comment:'Guru sangat sabar dan jelas!', createdAt:'2024-10-15T10:00:00.000Z' },
+      { id:2, muridId:0, courseId:1, rating:4, comment:'Materi bagus, kadang agak cepat.', createdAt:'2024-10-18T14:30:00.000Z' },
+      { id:3, muridId:0, courseId:3, rating:5, comment:'Belajar bahasa Inggris jadi menyenangkan!', createdAt:'2024-10-20T09:15:00.000Z' },
+      { id:4, muridId:0, courseId:5, rating:4, comment:'Cocok untuk pemula.', createdAt:'2024-10-22T16:45:00.000Z' },
+      { id:5, muridId:0, courseId:6, rating:5, comment:'Materi lengkap dan aplikatif!', createdAt:'2024-10-25T11:00:00.000Z' },
+      { id:6, muridId:0, courseId:5, rating:5, comment:'Guru Andi keren, penjelasannya runtut.', createdAt:'2024-10-26T10:00:00.000Z' },
+    ],
   };
 }
 
@@ -204,9 +339,14 @@ function loadDB(){
     if(raw){
       const d = JSON.parse(raw);
       if(!d.notifications) d.notifications = [];
+      if(!d.ratings) d.ratings = [];
       if(!d.nextId.notification) d.nextId.notification = 1;
+      if(!d.nextId.rating) d.nextId.rating = 1;
       if(d.courses) d.courses.forEach(c => { if(typeof c.image === 'undefined') c.image = ''; });
-      if(d.users) d.users.forEach(u => { if(typeof u.approved === 'undefined') u.approved = true; });
+      if(d.users) d.users.forEach(u => { 
+        if(typeof u.approved === 'undefined') u.approved = true; 
+        if(!u.wishlist) u.wishlist = [];
+      });
       return d;
     }
   }catch(e){}
@@ -377,7 +517,6 @@ function render(){
   const app = document.getElementById('app');
   const user = currentUser();
 
-  // Paksa logout guru yang belum diverifikasi
   if(user && user.role === 'guru' && user.approved === false){
     session = null;
     localStorage.removeItem(SESSION_KEY);
@@ -386,17 +525,20 @@ function render(){
     return;
   }
 
-  if((parts[0]==='bookings' || parts[0]==='guru' || parts[0]==='admin') && !user){
+  if((parts[0]==='bookings' || parts[0]==='guru' || parts[0]==='admin' || parts[0]==='wishlist') && !user){
     app.innerHTML = cardNotLoggedIn(); return;
   }
   if(parts[0]==='guru' && user.role!=='guru' && user.role!=='admin'){ app.innerHTML = noAccess(); return; }
   if(parts[0]==='admin' && user.role!=='admin'){ app.innerHTML = noAccess(); return; }
+  if(parts[0]==='wishlist' && user.role!=='murid'){ app.innerHTML = noAccess(); return; }
 
   switch(parts[0]){
     case undefined: case '': renderHome(app); break;
     case 'login':    renderAuth(app); break;
+    case 'about':    renderAbout(app); break;
     case 'courses':  parts[1] ? renderCourseDetail(app, +parts[1]) : renderCourses(app); break;
     case 'bookings': renderBookings(app); break;
+    case 'wishlist': renderWishlist(app); break;
     case 'guru':     renderGuruDash(app); break;
     case 'admin':    renderAdminDash(app); break;
     default:
@@ -429,6 +571,10 @@ function renderNav(){
     el.innerHTML = `
       <a href="#/" class="${active('')}">Beranda</a>
       <a href="#/courses" class="${active('courses')}">Kursus</a>
+      <a href="#/about" class="${active('about')}">Tentang</a>
+      <button class="theme-toggle" onclick="toggleTheme()" title="Ganti tema">
+        ${getTheme() === 'dark' ? '☀️' : '🌙'}
+      </button>
       <a href="#/login" class="btn btn-primary btn-sm">Login / Daftar</a>
     `;
     return;
@@ -436,13 +582,18 @@ function renderNav(){
   const roleLink =
     user.role==='admin' ? `<a href="#/admin" class="${active('admin')}">Admin Panel</a>` :
     user.role==='guru'  ? `<a href="#/guru" class="${active('guru')}">Dashboard Guru</a>` :
-                          `<a href="#/bookings" class="${active('bookings')}">Jadwal Saya</a>`;
+                          `<a href="#/bookings" class="${active('bookings')}">Jadwal Saya</a>
+                           <a href="#/wishlist" class="${active('wishlist')}">❤️ Wishlist</a>`;
 
   const unread = unreadCount(user.id);
   el.innerHTML = `
     <a href="#/" class="${active('')}">Beranda</a>
     <a href="#/courses" class="${active('courses')}">Kursus</a>
+    <a href="#/about" class="${active('about')}">Tentang</a>
     ${roleLink}
+    <button class="theme-toggle" onclick="toggleTheme()" title="Ganti tema">
+      ${getTheme() === 'dark' ? '☀️' : '🌙'}
+    </button>
     <button class="bell-wrap" id="bellIcon" title="Notifikasi" onclick="toggleNotifPanel(event)">
       <span class="bell-icon">🔔</span>
       ${unread > 0 ? `<span class="bell-badge">${unread > 9 ? '9+' : unread}</span>` : ''}
@@ -459,7 +610,7 @@ function renderNav(){
 }
 
 /* =========================================================
-   HOME — hero 2 kolom + benefit + kategori
+   HOME
    ========================================================= */
 function renderHome(app){
   const totalKursus = db.courses.length;
@@ -500,30 +651,6 @@ function renderHome(app){
       <div class="stat"><div class="num">${db.categories.length}</div><div class="lbl">Kategori Kursus</div></div>
     </div>
 
-    <h2>✨ Kenapa JDK Course?</h2>
-    <div class="benefit-grid">
-      <div class="benefit-card">
-        <div class="icon">🔍</div>
-        <h4>Pencarian Mudah</h4>
-        <p>Temukan kursus sesuai kebutuhan dengan filter kategori, tingkat, dan jadwal.</p>
-      </div>
-      <div class="benefit-card">
-        <div class="icon">👨‍🏫</div>
-        <h4>Guru Berpengalaman</h4>
-        <p>Belajar langsung dari guru terpilih di bidangnya masing-masing.</p>
-      </div>
-      <div class="benefit-card">
-        <div class="icon">📅</div>
-        <h4>Jadwal Fleksibel</h4>
-        <p>Pesan jadwal yang tersedia tanpa takut bentrok dengan aktivitas lain.</p>
-      </div>
-      <div class="benefit-card">
-        <div class="icon">🔔</div>
-        <h4>Notifikasi Real-time</h4>
-        <p>Dapatkan notifikasi otomatis saat jadwal dikonfirmasi atau dibatalkan.</p>
-      </div>
-    </div>
-
     <div class="between">
       <h2>📂 Kategori Kursus</h2>
       <a href="#/courses" class="btn btn-outline btn-sm"
@@ -557,25 +684,179 @@ function renderHome(app){
   `;
 }
 
+/* =========================================================
+   ABOUT / TENTANG
+   ========================================================= */
+function renderAbout(app){
+  const totalKursus = db.courses.length;
+  const totalGuru   = db.users.filter(u=>u.role==='guru' && u.approved !== false).length;
+  const totalMurid  = db.users.filter(u=>u.role==='murid').length;
+
+  app.innerHTML = `
+    <section class="about-hero">
+      <div class="about-hero-text">
+        <span class="about-tag">TENTANG KAMI</span>
+        <h1>JDK Course — Jembatan Antara Murid & Guru Terbaik</h1>
+        <p>Platform kursus online yang membantu Anda menemukan guru tepat, mengatur jadwal tanpa bentrok, dan belajar dengan lebih fokus.</p>
+        <div class="row" style="margin-top:18px">
+          <a href="#/courses" class="btn btn-primary">🔍 Mulai Cari Kursus</a>
+          ${!currentUser() ? `<a href="#/login" class="btn btn-outline" style="background:#fff;color:var(--gray-700);border:1px solid var(--gray-200)">Daftar Akun</a>` : ''}
+        </div>
+      </div>
+      <div class="about-hero-img">
+        <img src="https://images.unsplash.com/photo-1524178232363-1fb2b075b655?auto=format&fit=crop&w=800&q=80"
+             alt="Tentang JDK Course" onerror="this.style.display='none'">
+      </div>
+    </section>
+
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${totalKursus}</div><div class="lbl">Kursus Aktif</div></div>
+      <div class="stat"><div class="num">${totalGuru}</div><div class="lbl">Guru Terverifikasi</div></div>
+      <div class="stat"><div class="num">${totalMurid}</div><div class="lbl">Murid Terdaftar</div></div>
+      <div class="stat"><div class="num">${db.categories.length}</div><div class="lbl">Kategori Kursus</div></div>
+    </div>
+
+    <div class="about-section">
+      <h2>🎯 Apa itu JDK Course?</h2>
+      <p class="about-desc">
+        <b>JDK Course</b> adalah platform kursus online yang dirancang untuk mempertemukan <b>murid</b> dengan <b>guru</b> dalam proses pembelajaran yang efektif dan terjadwal. Kami menyadari bahwa menemukan kursus yang tepat — sesuai kebutuhan, tingkat kemampuan, dan jadwal yang tidak bertabrakan — sering menjadi kendala utama dalam belajar online.
+      </p>
+      <p class="about-desc">
+        Oleh karena itu, JDK Course hadir dengan sistem yang memudahkan pencarian, pemfilteran, serta pengaturan jadwal yang terintegrasi. Guru dapat mengelola kursus dan jadwalnya sendiri, sementara admin memastikan setiap guru terverifikasi sehingga kualitas pengajaran tetap terjaga.
+      </p>
+    </div>
+
+    <div class="about-section">
+      <h2>🌟 Visi & Misi</h2>
+      <div class="vision-grid">
+        <div class="vision-card">
+          <div class="vision-ico">🎯</div>
+          <h4>Visi</h4>
+          <p>Menjadi platform kursus online yang paling mudah diakses dan terpercaya bagi murid dan guru di seluruh Indonesia.</p>
+        </div>
+        <div class="vision-card">
+          <div class="vision-ico">🚀</div>
+          <h4>Misi</h4>
+          <p>Menyediakan sistem pencarian kursus yang akurat, jadwal yang fleksibel, serta memastikan setiap guru yang bergabung telah terverifikasi.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="about-section">
+      <h2>✨ Kelebihan JDK Course</h2>
+      <div class="benefit-grid" style="margin-top:16px">
+        <div class="benefit-card">
+          <div class="icon">🔍</div>
+          <h4>Pencarian Cerdas</h4>
+          <p>Cari kursus berdasarkan kata kunci, kategori, tingkat kemampuan, dan hari yang Anda inginkan.</p>
+        </div>
+        <div class="benefit-card">
+          <div class="icon">🛡️</div>
+          <h4>Guru Terverifikasi</h4>
+          <p>Setiap guru yang mendaftar harus lolos verifikasi admin agar kualitas pengajaran terjamin.</p>
+        </div>
+        <div class="benefit-card">
+          <div class="icon">📅</div>
+          <h4>Jadwal Anti Bentrok</h4>
+          <p>Sistem otomatis mendeteksi bentrok jadwal saat Anda memesan kursus baru.</p>
+        </div>
+        <div class="benefit-card">
+          <div class="icon">🔔</div>
+          <h4>Notifikasi Real-time</h4>
+          <p>Dapatkan pemberitahuan langsung saat jadwal dikonfirmasi, dibatalkan, atau diubah.</p>
+        </div>
+        <div class="benefit-card">
+          <div class="icon">⭐</div>
+          <h4>Rating & Ulasan</h4>
+          <p>Lihat penilaian dan ulasan dari murid lain sebelum memilih kursus.</p>
+        </div>
+        <div class="benefit-card">
+          <div class="icon">📱</div>
+          <h4>Responsif & Modern</h4>
+          <p>Akses dari desktop maupun ponsel — tanpa perlu instalasi aplikasi khusus.</p>
+        </div>
+        <div class="benefit-card">
+          <div class="icon">📜</div>
+          <h4>Riwayat Belajar</h4>
+          <p>Semua jadwal yang pernah dipesan tercatat rapi di tab Riwayat untuk evaluasi Anda.</p>
+        </div>
+        <div class="benefit-card">
+          <div class="icon">👨‍🏫</div>
+          <h4>Guru Kelola Sendiri</h4>
+          <p>Guru dapat mengatur kursus, jadwal, dan profil mereka tanpa perlu bantuan admin.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="about-section">
+      <h2>🎓 Untuk Siapa JDK Course?</h2>
+      <div class="audience-grid">
+        <div class="audience-card">
+          <div class="audience-ico">🧑‍🎓</div>
+          <h4>Murid</h4>
+          <p>Anda yang ingin belajar keterampilan baru atau memperdalam materi dengan guru terbaik, sesuai jadwal Anda.</p>
+        </div>
+        <div class="audience-card">
+          <div class="audience-ico">👨‍🏫</div>
+          <h4>Guru / Tutor</h4>
+          <p>Anda yang ingin berbagi keahlian dan menjangkau lebih banyak murid dengan manajemen kursus yang mudah.</p>
+        </div>
+        <div class="audience-card">
+          <div class="audience-ico">🏫</div>
+          <h4>Lembaga Kursus</h4>
+          <p>Anda yang ingin mengelola banyak guru dan jadwal dalam satu platform terpusat (via admin).</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="about-cta">
+      <h2>Siap Memulai Perjalanan Belajar Anda?</h2>
+      <p>Bergabung sekarang — gratis dan tanpa biaya pendaftaran.</p>
+      <div class="row" style="justify-content:center;margin-top:16px">
+        ${!currentUser()
+          ? `<a href="#/login" class="btn btn-primary">Daftar Sekarang</a>
+             <a href="#/courses" class="btn btn-outline" style="background:transparent;color:#fff;border-color:#fff">Lihat Kursus</a>`
+          : `<a href="#/courses" class="btn btn-primary" style="background:#fff;color:var(--primary-dark)">🔍 Jelajahi Kursus</a>`}
+      </div>
+    </div>
+  `;
+}
+
+/* =========================================================
+   COURSE CARD (DENGAN WISHLIST)
+   ========================================================= */
 function courseCard(c){
   const guru = findUser(c.guruId);
   const cat  = findCategory(c.categoryId);
   const scheds = schedulesByCourse(c.id);
   const days = [...new Set(scheds.map(s=>s.day))].join(', ') || '-';
   const levelBadge = c.level==='Pemula' ? 'green' : c.level==='Menengah' ? 'orange' : 'red';
+  const { avg, count } = getAvgRating(c.id);
+  const user = currentUser();
+  const isWishlisted = user && user.wishlist && user.wishlist.includes(c.id);
 
   const thumbStyle = c.image
     ? `background-image:url('${c.image}');background-size:cover;background-position:center;`
     : `background:linear-gradient(135deg,var(--primary),#7c3aed);`;
   const thumbContent = c.image ? '' : escapeHtml(c.title[0]);
 
+  const ratingHtml = count > 0
+    ? `<div class="stars-display" title="${avg.toFixed(1)} dari 5">
+         ${starsHtml(avg)} <span class="count">${avg.toFixed(1)} (${count})</span>
+       </div>`
+    : `<div class="muted" style="font-size:12px">Belum ada rating</div>`;
+
   return `
-    <a class="course-card" href="#/courses/${c.id}">
+    <div class="course-card" onclick="location.hash='#/courses/${c.id}'">
       <div class="course-thumb" style="${thumbStyle}">${thumbContent}</div>
+      <button class="btn-heart" onclick="toggleWishlist(${c.id}, event)" title="${isWishlisted ? 'Hapus dari Wishlist' : 'Tambah ke Wishlist'}">
+        ${isWishlisted ? '❤️' : '🤍'}
+      </button>
       <div class="course-body">
         <h3>${escapeHtml(c.title)}</h3>
         <div class="muted">👨‍🏫 ${escapeHtml(guru?guru.name:'-')}</div>
         <div class="muted">📅 ${escapeHtml(days)}</div>
+        ${ratingHtml}
         <div class="badges">
           <span class="badge gray">${escapeHtml(cat?cat.name:'-')}</span>
           <span class="badge ${levelBadge}">${c.level}</span>
@@ -585,7 +866,7 @@ function courseCard(c){
           <span class="muted">${c.duration} bulan</span>
         </div>
       </div>
-    </a>
+    </div>
   `;
 }
 
@@ -739,6 +1020,7 @@ function handleRegister(e){
     approved,
     tanggalLahir,
     jenisKelamin,
+    wishlist: [],
     ...(role === 'guru' ? { bio:'' } : {}),
   };
   db.users.push(u);
@@ -812,7 +1094,29 @@ function renderCourses(app){
 }
 
 /* =========================================================
-   COURSE DETAIL
+   WISHLIST PAGE
+   ========================================================= */
+function renderWishlist(app){
+  const user = currentUser();
+  const wishlistCourses = db.courses.filter(c => user.wishlist && user.wishlist.includes(c.id));
+
+  app.innerHTML = `
+    <h1>❤️ Wishlist Kursus</h1>
+    <p class="muted" style="margin-bottom:18px">Daftar kursus yang Anda simpan untuk dipelajari nanti.</p>
+    
+    ${wishlistCourses.length === 0 
+      ? `<div class="empty">
+           <div class="ico">💔</div>
+           <h3>Wishlist masih kosong</h3>
+           <p class="muted" style="margin:10px 0 16px">Jelajahi kursus dan tekan tombol hati untuk menyimpannya di sini.</p>
+           <a href="#/courses" class="btn btn-primary">Jelajahi Kursus</a>
+         </div>`
+      : `<div class="grid">${wishlistCourses.map(courseCard).join('')}</div>`}
+  `;
+}
+
+/* =========================================================
+   COURSE DETAIL + RATING
    ========================================================= */
 function renderCourseDetail(app, id){
   const c = findCourse(id);
@@ -823,21 +1127,123 @@ function renderCourseDetail(app, id){
   const user = currentUser();
   const levelBadge = c.level==='Pemula' ? 'green' : c.level==='Menengah' ? 'orange' : 'red';
   const umurGuru = guru ? hitungUmur(guru.tanggalLahir) : null;
+  const { avg, count } = getAvgRating(c.id);
+  const allRatings = getCourseRatings(c.id).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  const isWishlisted = user && user.wishlist && user.wishlist.includes(c.id);
 
   const banner = c.image
     ? `<img src="${c.image}" alt="${escapeHtml(c.title)}" style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;margin-bottom:18px;display:block;">`
     : '';
+
+  let ratingSummaryHtml = '';
+  if(count > 0){
+    ratingSummaryHtml = `
+      <div class="rating-summary">
+        <div class="big-score">
+          <div class="n">${avg.toFixed(1)}</div>
+          <div class="s">dari 5</div>
+        </div>
+        <div class="info">
+          <div class="stars-display" style="font-size:18px">${starsHtml(avg)}</div>
+          <div class="hint">Berdasarkan <b>${count}</b> ulasan murid</div>
+        </div>
+      </div>
+    `;
+  } else {
+    ratingSummaryHtml = `
+      <div class="rating-summary">
+        <div class="info">
+          <div class="muted">Belum ada rating untuk kursus ini.</div>
+          <div class="hint">Jadilah yang pertama memberi rating setelah kursus berjalan!</div>
+        </div>
+      </div>
+    `;
+  }
+
+  let myRatingHtml = '';
+  if(user && user.role === 'murid'){
+    if(canUserRate(c.id, user.id)){
+      const my = getUserRating(c.id, user.id);
+      const currentVal = my ? my.rating : 0;
+      myRatingHtml = `
+        <div class="rating-form">
+          <h4>${my ? '✏️ Edit Rating Anda' : '⭐ Beri Rating untuk Kursus Ini'}</h4>
+          <input type="hidden" id="ratingInput" value="${currentVal}">
+          <div class="star-input" id="starInput">
+            ${[1,2,3,4,5].map(n => `<span class="si ${n <= currentVal ? 'active' : ''}" onclick="setRatingInput(${n})">★</span>`).join('')}
+          </div>
+          <textarea id="ratingComment" placeholder="Tulis ulasan Anda (opsional)...">${my ? escapeHtml(my.comment||'') : ''}</textarea>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" onclick="submitRating(${c.id})">${my ? 'Simpan Perubahan' : 'Kirim Rating'}</button>
+            ${my ? `<button class="btn btn-danger btn-sm" onclick="deleteRating(${c.id})">Hapus Rating</button>` : ''}
+          </div>
+        </div>
+      `;
+    } else {
+      myRatingHtml = `
+        <div class="rating-form">
+          <p class="muted" style="font-size:13px">
+            ℹ️ Anda dapat memberi rating setelah memiliki <b>jadwal belajar yang dikonfirmasi</b> untuk kursus ini.
+          </p>
+        </div>
+      `;
+    }
+  } else if(!user){
+    myRatingHtml = `
+      <div class="rating-form">
+        <p class="muted" style="font-size:13px">
+          <a href="#/login" style="color:var(--primary);font-weight:600">Login</a> sebagai murid untuk memberi rating.
+        </p>
+      </div>
+    `;
+  }
+
+  const reviewsHtml = allRatings.length === 0
+    ? ''
+    : `
+      <div class="review-list">
+        ${allRatings.slice(0, 10).map(r => {
+          const m = findUser(r.muridId);
+          const name = m ? m.name : 'Pengguna';
+          return `
+            <div class="review-item">
+              <div class="review-head">
+                <div>
+                  <b>${escapeHtml(name)}</b>
+                  <span class="review-stars">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span>
+                </div>
+                <small>${timeAgo(r.createdAt)}</small>
+              </div>
+              ${r.comment ? `<div class="review-text">${escapeHtml(r.comment)}</div>` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
 
   app.innerHTML = `
     <a href="#/courses" class="btn btn-outline btn-sm" style="margin-bottom:14px">← Kembali</a>
     ${banner}
     <div class="detail-grid">
       <div class="card">
-        <div class="badges" style="margin-bottom:10px">
-          <span class="badge gray">${escapeHtml(cat?cat.name:'-')}</span>
-          <span class="badge ${levelBadge}">${c.level}</span>
+        <div class="between" style="margin-bottom:10px">
+          <div class="badges">
+            <span class="badge gray">${escapeHtml(cat?cat.name:'-')}</span>
+            <span class="badge ${levelBadge}">${c.level}</span>
+          </div>
+          ${user && user.role === 'murid' ? `
+            <button class="btn btn-outline btn-sm" onclick="toggleWishlist(${c.id}, event)">
+              ${isWishlisted ? '❤️ Hapus dari Wishlist' : '🤍 Simpan ke Wishlist'}
+            </button>
+          ` : ''}
         </div>
         <h1>${escapeHtml(c.title)}</h1>
+        <div class="stars-display" style="margin:8px 0 12px;font-size:16px">
+          ${count > 0
+            ? `${starsHtml(avg)} <span class="count">${avg.toFixed(1)} (${count} ulasan)</span>`
+            : `<span class="muted">Belum ada rating</span>`}
+        </div>
         <p class="muted" style="margin:10px 0 16px">${escapeHtml(c.description)}</p>
         <div class="row" style="gap:20px;font-size:14px;color:var(--gray-700)">
           <span>👨‍🏫 Guru: <b>${escapeHtml(guru?guru.name:'-')}</b></span>
@@ -889,6 +1295,11 @@ function renderCourseDetail(app, id){
               </div>
             </div>`;
         }).join('')}
+
+    <h2 style="margin-top:32px">⭐ Rating & Ulasan</h2>
+    ${ratingSummaryHtml}
+    ${myRatingHtml}
+    ${reviewsHtml}
   `;
 }
 
@@ -933,7 +1344,7 @@ function bookSchedule(scheduleId){
 function overlaps(s1,e1,s2,e2){ return s1 < e2 && s2 < e1; }
 
 /* =========================================================
-   BOOKINGS (MURID) — hanya tombol Batalkan
+   BOOKINGS (MURID)
    ========================================================= */
 function renderBookings(app){
   const user = currentUser();
@@ -999,7 +1410,7 @@ function statusBadge(s){
 }
 
 /* =========================================================
-   CANCEL — notifikasi dua arah
+   CANCEL
    ========================================================= */
 function cancelBooking(id){
   const b = db.bookings.find(x=>x.id===id);
@@ -1049,7 +1460,7 @@ function cancelBooking(id){
 }
 
 /* =========================================================
-   CONFIRM — oleh guru
+   CONFIRM
    ========================================================= */
 function confirmBooking(id){
   const b = db.bookings.find(x=>x.id===id);
@@ -1111,10 +1522,14 @@ function renderGuruTab(tab, myCourses, myCourseIds, myBookings){
       ${myCourses.length===0
         ? `<div class="empty"><div class="ico">📚</div><p>Belum ada kursus. Tambahkan kursus pertama Anda.</p></div>`
         : `<div class="table-wrap"><table>
-            <thead><tr><th>Gambar</th><th>Judul</th><th>Kategori</th><th>Tingkat</th><th>Durasi</th><th>Harga</th><th>Aksi</th></tr></thead>
+            <thead><tr><th>Gambar</th><th>Judul</th><th>Kategori</th><th>Tingkat</th><th>Durasi</th><th>Harga</th><th>Rating</th><th>Aksi</th></tr></thead>
             <tbody>
-              ${myCourses.map(c=>`
-                <tr>
+              ${myCourses.map(c=>{
+                const { avg, count } = getAvgRating(c.id);
+                const ratingCell = count > 0
+                  ? `<span class="stars-display">${starsHtml(avg)} <span class="count">${avg.toFixed(1)} (${count})</span></span>`
+                  : `<span class="muted">-</span>`;
+                return `<tr>
                   <td>${c.image
                     ? `<img src="${c.image}" style="width:50px;height:50px;object-fit:cover;border-radius:6px;">`
                     : `<div style="width:50px;height:50px;border-radius:6px;background:linear-gradient(135deg,var(--primary),#7c3aed);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;">${escapeHtml(c.title[0])}</div>`}
@@ -1124,11 +1539,13 @@ function renderGuruTab(tab, myCourses, myCourseIds, myBookings){
                   <td>${c.level}</td>
                   <td>${c.duration} bulan</td>
                   <td>${fmtPrice(c.price)}</td>
+                  <td>${ratingCell}</td>
                   <td>
                     <button class="btn btn-outline btn-sm" onclick="openCourseForm(${c.id})">Edit</button>
                     <button class="btn btn-danger btn-sm" onclick="deleteCourse(${c.id})">Hapus</button>
                   </td>
-                </tr>`).join('')}
+                </tr>`;
+              }).join('')}
             </tbody>
           </table></div>`}
     `;
@@ -1415,11 +1832,12 @@ function saveCourse(e, id){
 }
 
 function deleteCourse(id){
-  if(!confirm('Hapus kursus ini? Jadwal dan pemesanan terkait juga akan dihapus.')) return;
+  if(!confirm('Hapus kursus ini? Jadwal, pemesanan, dan rating terkait juga akan dihapus.')) return;
   const schedIds = db.schedules.filter(s=>s.courseId===id).map(s=>s.id);
   db.courses = db.courses.filter(c=>c.id!==id);
   db.schedules = db.schedules.filter(s=>s.courseId!==id);
   db.bookings = db.bookings.filter(b=>!schedIds.includes(b.scheduleId));
+  db.ratings = db.ratings.filter(r=>r.courseId!==id);
   saveDB();
   toast('Kursus dihapus','info');
   render();
@@ -1524,6 +1942,7 @@ function renderAdminDash(app){
       <div class="stat"><div class="num">${db.courses.length}</div><div class="lbl">Kursus</div></div>
       <div class="stat"><div class="num">${db.schedules.length}</div><div class="lbl">Jadwal</div></div>
       <div class="stat"><div class="num">${db.bookings.length}</div><div class="lbl">Pemesanan</div></div>
+      <div class="stat"><div class="num">${db.ratings.length}</div><div class="lbl">Rating</div></div>
     </div>
 
     <div class="tabs">
@@ -1536,6 +1955,7 @@ function renderAdminDash(app){
       <button class="${tab==='courses'?'active':''}"    onclick="ui.adminTab='courses';render()">Kursus</button>
       <button class="${tab==='schedules'?'active':''}"  onclick="ui.adminTab='schedules';render()">Jadwal</button>
       <button class="${tab==='bookings'?'active':''}"   onclick="ui.adminTab='bookings';render()">Pemesanan</button>
+      <button class="${tab==='ratings'?'active':''}"    onclick="ui.adminTab='ratings';render()">Rating</button>
       <button class="${tab==='report'?'active':''}"     onclick="ui.adminTab='report';render()">Laporan</button>
       <button class="${tab==='backup'?'active':''}"     onclick="ui.adminTab='backup';render()">Backup</button>
     </div>
@@ -1694,10 +2114,14 @@ function renderAdminTab(tab){
         <button class="btn btn-primary btn-sm" onclick="openCourseForm()">+ Tambah Kursus</button>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Gambar</th><th>Judul</th><th>Kategori</th><th>Guru</th><th>Tingkat</th><th>Durasi</th><th>Harga</th><th>Aksi</th></tr></thead>
+        <thead><tr><th>Gambar</th><th>Judul</th><th>Kategori</th><th>Guru</th><th>Tingkat</th><th>Durasi</th><th>Harga</th><th>Rating</th><th>Aksi</th></tr></thead>
         <tbody>
           ${db.courses.map(c=>{
             const g = findUser(c.guruId);
+            const { avg, count } = getAvgRating(c.id);
+            const ratingCell = count > 0
+              ? `<span class="stars-display">${starsHtml(avg)} <span class="count">${avg.toFixed(1)} (${count})</span></span>`
+              : `<span class="muted">-</span>`;
             return `<tr>
               <td>${c.image
                 ? `<img src="${c.image}" style="width:50px;height:50px;object-fit:cover;border-radius:6px;">`
@@ -1709,6 +2133,7 @@ function renderAdminTab(tab){
               <td>${c.level}</td>
               <td>${c.duration} bulan</td>
               <td>${fmtPrice(c.price)}</td>
+              <td>${ratingCell}</td>
               <td style="white-space:nowrap">
                 <button class="btn btn-outline btn-sm" onclick="openCourseForm(${c.id})">Edit</button>
                 <button class="btn btn-danger btn-sm" onclick="deleteCourse(${c.id})">Hapus</button>
@@ -1772,6 +2197,31 @@ function renderAdminTab(tab){
               }).join('')}
         </tbody>
       </table></div>
+    `;
+  }
+  if(tab==='ratings'){
+    const allRatings = [...db.ratings].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return `
+      <h3 style="margin-bottom:12px">⭐ Semua Rating & Ulasan (${db.ratings.length})</h3>
+      ${allRatings.length===0
+        ? `<div class="empty"><div class="ico">⭐</div><p>Belum ada rating dari murid.</p></div>`
+        : `<div class="table-wrap"><table>
+            <thead><tr><th>Murid</th><th>Kursus</th><th>Rating</th><th>Ulasan</th><th>Tanggal</th><th>Aksi</th></tr></thead>
+            <tbody>
+              ${allRatings.map(r=>{
+                const m = findUser(r.muridId);
+                const c = findCourse(r.courseId);
+                return `<tr>
+                  <td>${escapeHtml(m?m.name:'Pengguna')}</td>
+                  <td>${escapeHtml(c?c.title:'-')}</td>
+                  <td><span class="stars-display">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span></td>
+                  <td><small>${escapeHtml((r.comment||'-').slice(0, 80))}${(r.comment||'').length>80?'…':''}</small></td>
+                  <td><small class="muted">${fmtDate(r.createdAt)}</small></td>
+                  <td><button class="btn btn-danger btn-sm" onclick="adminDeleteRating(${r.id})">Hapus</button></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table></div>`}
     `;
   }
   if(tab==='report'){
@@ -1878,6 +2328,19 @@ function renderAdminTab(tab){
 }
 
 /* =========================================================
+   ADMIN: DELETE RATING
+   ========================================================= */
+function adminDeleteRating(ratingId){
+  const r = db.ratings.find(x => x.id === ratingId);
+  if(!r) return;
+  if(!confirm('Hapus rating ini?')) return;
+  db.ratings = db.ratings.filter(x => x.id !== ratingId);
+  saveDB();
+  toast('Rating dihapus','info');
+  render();
+}
+
+/* =========================================================
    EXPORT CSV
    ========================================================= */
 function toCSV(rows){
@@ -1901,14 +2364,19 @@ function downloadCSV(filename, csv){
 function exportCSV(type){
   const ts = new Date().toISOString().slice(0,10);
   if(type === 'courses'){
-    const rows = [['ID','Judul','Kategori','Guru','Tingkat','Durasi (bulan)','Harga','Ada Gambar']];
-    db.courses.forEach(c => rows.push([
-      c.id, c.title,
-      findCategory(c.categoryId)?.name || '',
-      findUser(c.guruId)?.name || '',
-      c.level, c.duration, c.price,
-      c.image ? 'Ya' : 'Tidak',
-    ]));
+    const rows = [['ID','Judul','Kategori','Guru','Tingkat','Durasi (bulan)','Harga','Ada Gambar','Rating','Jumlah Review']];
+    db.courses.forEach(c => {
+      const { avg, count } = getAvgRating(c.id);
+      rows.push([
+        c.id, c.title,
+        findCategory(c.categoryId)?.name || '',
+        findUser(c.guruId)?.name || '',
+        c.level, c.duration, c.price,
+        c.image ? 'Ya' : 'Tidak',
+        count > 0 ? avg.toFixed(2) : '-',
+        count
+      ]);
+    });
     downloadCSV(`laporan_kursus_${ts}.csv`, toCSV(rows));
   } else if(type === 'schedules'){
     const rows = [['ID','Kursus','Guru','Hari','Mulai','Selesai','Kuota','Terisi']];
@@ -1977,9 +2445,14 @@ function importData(){
       if(!confirm('Data saat ini akan ditimpa. Lanjutkan?')) return;
       db = parsed;
       if(!db.notifications) db.notifications = [];
+      if(!db.ratings) db.ratings = [];
       if(!db.nextId.notification) db.nextId.notification = 1;
+      if(!db.nextId.rating) db.nextId.rating = 1;
       db.courses.forEach(c => { if(typeof c.image === 'undefined') c.image = ''; });
-      db.users.forEach(u => { if(typeof u.approved === 'undefined') u.approved = true; });
+      db.users.forEach(u => { 
+        if(typeof u.approved === 'undefined') u.approved = true; 
+        if(!u.wishlist) u.wishlist = [];
+      });
       saveDB();
       toast('Data berhasil dipulihkan','success');
       render();
@@ -2080,7 +2553,7 @@ function saveGuru(e, id){
       id: uid('user'), name, username, email, salt,
       passwordHash: hashPassword(pass, salt),
       role:'guru', bio, tanggalLahir, jenisKelamin,
-      approved: true,
+      approved: true, wishlist: []
     });
     toast('Guru ditambahkan','success');
   }
@@ -2122,13 +2595,14 @@ function deleteUser(id){
   const u = findUser(id);
   if(!u) return;
   if(u.role === 'admin'){ toast('Tidak dapat menghapus admin','error'); return; }
-  if(!confirm(`Hapus pengguna "${u.name}"? Kursus & jadwal terkait juga akan dihapus.`)) return;
+  if(!confirm(`Hapus pengguna "${u.name}"? Kursus, jadwal, & rating terkait juga akan dihapus.`)) return;
 
   const courseIds = db.courses.filter(c=>c.guruId===id).map(c=>c.id);
   db.users = db.users.filter(x=>x.id!==id);
   db.courses = db.courses.filter(c=>c.guruId!==id);
   db.schedules = db.schedules.filter(s=>!courseIds.includes(s.courseId));
   db.bookings = db.bookings.filter(b=>b.muridId!==id && !courseIds.includes(b.courseId));
+  db.ratings = db.ratings.filter(r => r.muridId !== id && !courseIds.includes(r.courseId));
   saveDB();
   toast('Pengguna dihapus','info');
   render();
@@ -2184,7 +2658,7 @@ function deleteCategory(id){
    EXPOSE KE WINDOW
    ========================================================= */
 Object.assign(window, {
-  render, renderCourses,
+  render, renderCourses, renderAbout, renderWishlist,
   filterState, ui,
   handleLogin, handleRegister, logout,
   bookSchedule, cancelBooking, confirmBooking,
@@ -2198,4 +2672,6 @@ Object.assign(window, {
   toggleNotifPanel, markAllReadAndRefresh,
   handleCourseImage, clearCourseImage,
   approveGuru, rejectGuru,
+  setRatingInput, submitRating, deleteRating, adminDeleteRating,
+  toggleTheme, toggleWishlist
 });
