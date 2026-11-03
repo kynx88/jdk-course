@@ -539,11 +539,7 @@ function loginForm(){
       <button class="btn btn-primary btn-block" type="submit">Login</button>
     </form>
     <div style="margin-top:16px;padding:12px;background:var(--gray-50);border-radius:8px;font-size:12px;color:var(--gray-500);line-height:1.7">
-      <b>Akun demo:</b><br>
-      Admin: admin@jdk.com / admin123<br>
-      Guru: budi@jdk.com / guru123<br>
-      Murid: rina@jdk.com / murid123<br>
-      <i>Bisa juga login pakai username: admin / budi / rina</i>
+     
     </div>
   `;
 }
